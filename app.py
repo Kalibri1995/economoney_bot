@@ -272,6 +272,7 @@ async def stats_callback(call: CallbackQuery):
     names = {"day": "день", "week": "неделю", "month": "месяц"}
 
     async with async_session() as session:
+        # ---- 📈 Статистика за неделю ----
         if period == "week":
             daily_stats, balances, total_sum = await get_weekly_stats(session, call.from_user.id)
             if not daily_stats and not balances:
@@ -291,35 +292,47 @@ async def stats_callback(call: CallbackQuery):
                 else:
                     lines.append("   • Нет расходов")
                 day_total = sum(cats.values()) if cats else 0
-                lines.append(f"   💵 Итого за день: {day_total:.2f} ₽")
+                lines.append(f"   💵 Потрачено за день: {day_total:.2f} ₽")
 
                 if d in balances:
                     lines.append(f"   💰 Баланс на конец дня: {balances[d]:.2f} ₽\n")
                 else:
                     lines.append("   💰 Баланс не найден\n")
 
-            lines.append(f"💰 Всего за неделю: {total_sum:.2f} ₽")
+            lines.append(f"💵 Потрачено за неделю: {total_sum:.2f} ₽")
             await call.message.answer("\n".join(lines), reply_markup=menu_kb)
             await call.answer()
             return
 
-        # для day / month оставляем как есть
+        # ---- 📅 Статистика за день / месяц ----
         stats = await get_stats(session, call.from_user.id, period)
 
-    if not stats:
-        await call.message.answer(f"📊 За этот период расходов не найдено.", reply_markup=menu_kb)
+        if not stats:
+            await call.message.answer(f"📊 За этот период расходов не найдено.", reply_markup=menu_kb)
+            await call.answer()
+            return
+
+        lines = [f"📊 Статистика за {names[period]}:\n"]
+        total = 0
+        for category, amount in stats:
+            lines.append(f"• {category or 'Без категории'} — {amount:.2f} ₽")
+            total += amount
+        lines.append(f"\n💵 Потрачено: {total:.2f} ₽")
+
+        # 🔹 Добавляем баланс только если день
+        if period == "day":
+            today = date.today()
+            balance_query = await session.execute(
+                select(Balance.balance).filter_by(user_id=call.from_user.id, date=today)
+            )
+            balance_today = balance_query.scalar()
+            if balance_today is not None:
+                lines.append(f"💰 Баланс на конец дня: {balance_today:.2f} ₽")
+            else:
+                lines.append("💰 Баланс не найден")
+
+        await call.message.answer("\n".join(lines), reply_markup=menu_kb)
         await call.answer()
-        return
-
-    lines = [f"📊 Статистика за {names[period]}:\n"]
-    total = 0
-    for category, amount in stats:
-        lines.append(f"• {category or 'Без категории'} — {amount:.2f} ₽")
-        total += amount
-    lines.append(f"\n💵 Всего: {total:.2f} ₽")
-
-    await call.message.answer("\n".join(lines), reply_markup=menu_kb)
-    await call.answer()
 
 
 # --- Запуск ---
