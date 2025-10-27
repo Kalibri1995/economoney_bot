@@ -53,6 +53,9 @@ categories_kb = InlineKeyboardMarkup(inline_keyboard=[
     ],
     [
         InlineKeyboardButton(text="🍔 Доставка/Рестораны", callback_data="cat_Доставка/Рестораны"),
+        InlineKeyboardButton(text="🚗 Транспорт", callback_data="cat_Транспорт"),
+    ],
+    [
         InlineKeyboardButton(text="🧾 Прочее", callback_data="cat_Прочее")
     ]
 ])
@@ -306,12 +309,6 @@ async def stats_callback(call: CallbackQuery):
 
         # ---- 📅 Статистика за день / месяц ----
         stats = await get_stats(session, call.from_user.id, period)
-
-        if not stats:
-            await call.message.answer(f"📊 За этот период расходов не найдено.", reply_markup=menu_kb)
-            await call.answer()
-            return
-
         lines = [f"📊 Статистика за {names[period]}:\n"]
         total = 0
         for category, amount in stats:
@@ -326,10 +323,35 @@ async def stats_callback(call: CallbackQuery):
                 select(Balance.balance).filter_by(user_id=call.from_user.id, date=today)
             )
             balance_today = balance_query.scalar()
-            if balance_today is not None:
-                lines.append(f"💰 Баланс на конец дня: {balance_today:.2f} ₽")
-            else:
-                lines.append("💰 Баланс не найден")
+
+            # 💡 Если нет записи — пробуем вычислить вручную
+            if balance_today is None:
+                # 1. Найти последний известный баланс
+                last_balance_query = await session.execute(
+                    select(Balance.date, Balance.balance)
+                    .filter(Balance.user_id == call.from_user.id)
+                    .order_by(Balance.date.desc())
+                    .limit(1)
+                )
+                last_balance_row = last_balance_query.first()
+
+                if last_balance_row:
+                    last_date, last_balance = last_balance_row
+                    days_passed = (today - last_date).days
+                    # 2. Сколько лимита добавилось с тех пор
+                    restored_balance = last_balance + days_passed * DAILY_LIMIT
+                else:
+                    restored_balance = DAILY_LIMIT  # если вообще нет записей
+
+                # 3. Вычитаем траты за сегодня
+                expenses_query = await session.execute(
+                    select(func.sum(Expense.amount))
+                    .filter(Expense.user_id == call.from_user.id, Expense.date == today)
+                )
+                spent_today = expenses_query.scalar() or 0
+                balance_today = restored_balance - spent_today
+
+            lines.append(f"💰 Баланс на конец дня: {balance_today:.2f} ₽")
 
         await call.message.answer("\n".join(lines), reply_markup=menu_kb)
         await call.answer()
